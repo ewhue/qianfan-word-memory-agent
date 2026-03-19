@@ -1,0 +1,91 @@
+flowchart TD
+  start["开始"]
+  parse["解析输入与会话状态"]
+  save["保存会话状态"]
+  main{"主流程分流"}
+
+  profile["单词核心画像"]
+  parse_profile["解析单词画像"]
+  emotion["情绪价值输出"]
+  story["故事记忆内容"]
+  story_check["组装故事记忆检查响应"]
+  story_retry["故事记忆重教内容"]
+  story_retry_check["组装故事记忆复检响应"]
+
+  component["拆分理解内容"]
+  homophone["谐音记忆内容"]
+  homophone_check["组装谐音记忆检查响应"]
+  homophone_retry["谐音记忆重教内容"]
+  homophone_retry_check["组装谐音记忆复检响应"]
+
+  quiz["生成结构化测验"]
+  parse_quiz["解析测验结构"]
+  study_resp["组装学习测验响应"]
+
+  judge_answer["结构化判定答案"]
+  parse_answer["解析答案判断"]
+  answer_route{"答案结果分流"}
+  progress["更新已学单词进度"]
+  summary["总结已学单词"]
+  parse_summary["解析学习总结"]
+  summary_resp["组装答对后总结响应"]
+  retry_pkg["生成答错后的重教方案"]
+  parse_retry["解析重教方案"]
+  retry_resp["组装答错后响应"]
+
+  game_resp["组装开始游戏响应"]
+  need_words_resp["组装补充单词响应"]
+  clarify_resp["组装澄清响应"]
+
+  select_output["选择本轮最终输出"]
+  end["结束"]
+
+  user_story["用户点击：记住了 / 还没记住"]
+  user_homophone["用户点击：记住了 / 还没记住"]
+  user_quiz["用户回答测验"]
+  user_summary["用户选择：继续记忆 / 开始游戏"]
+  user_need_words["用户发送新单词"]
+  user_clarify["用户补充输入"]
+
+  start --> parse --> save --> main
+
+  main -- "new_words / continue_memory" --> profile
+  profile --> parse_profile --> emotion --> story --> story_check --> select_output
+
+  story_check -. "前端展示后等待下一轮输入" .-> user_story
+  user_story -. "下一轮回到解析" .-> parse
+
+  main -- "story_retry" --> story_retry --> story_retry_check --> select_output
+  story_retry_check -. "前端展示后等待下一轮输入" .-> user_story
+
+  main -- "story_remembered" --> component --> homophone --> homophone_check --> select_output
+  homophone_check -. "前端展示后等待下一轮输入" .-> user_homophone
+  user_homophone -. "下一轮回到解析" .-> parse
+
+  main -- "homophone_retry" --> homophone_retry --> homophone_retry_check --> select_output
+  homophone_retry_check -. "前端展示后等待下一轮输入" .-> user_homophone
+
+  main -- "homophone_remembered" --> quiz --> parse_quiz --> study_resp --> select_output
+  study_resp -. "前端展示后等待作答" .-> user_quiz
+  user_quiz -. "下一轮回到解析" .-> parse
+
+  main -- "quiz_answer" --> judge_answer --> parse_answer --> answer_route
+  answer_route -- "correct" --> progress --> summary --> parse_summary --> summary_resp --> select_output
+  answer_route -- "incorrect" --> retry_pkg --> parse_retry --> retry_resp --> select_output
+
+  summary_resp -. "前端展示后等待选择" .-> user_summary
+  user_summary -. "下一轮回到解析" .-> parse
+
+  retry_resp -. "前端展示后等待重新作答" .-> user_quiz
+
+  main -- "start_game" --> game_resp --> select_output
+
+  main -- "need_more_words" --> need_words_resp --> select_output
+  need_words_resp -. "前端展示后等待新单词" .-> user_need_words
+  user_need_words -. "下一轮回到解析" .-> parse
+
+  main -- "clarify / 其它无法识别输入" --> clarify_resp --> select_output
+  clarify_resp -. "前端展示后等待补充输入" .-> user_clarify
+  user_clarify -. "下一轮回到解析" .-> parse
+
+  select_output --> end
