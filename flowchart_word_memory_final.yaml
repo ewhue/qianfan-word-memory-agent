@@ -6793,47 +6793,424 @@ workflow_detail:
             content: null
             type: generated
         settings:
-          code: "def _clean(value):\n    text = value if isinstance(value, str) else\
-            \ \"\"\n    text = text.strip()\n    if text in {\"\", \"null\", \"None\"\
-            }:\n        return \"\"\n    return text\n\ndef _pick(*values):\n    for\
-            \ item in values:\n        text = _clean(item)\n        if text:\n   \
-            \         return text\n    return \"\"\n\ndef main(params):\n    intent\
-            \ = str(params.get(\"intent\", \"\")).strip()\n    answer_result = str(params.get(\"\
-            answer_result\", \"\")).strip().lower()\n\n    if intent in {\"new_words\"\
-            , \"continue_memory\"}:\n        final_output = _pick(\n            params.get(\"\
-            story_check_response\", \"\"),\n            params.get(\"clarify_response\"\
-            , \"\"),\n        )\n    elif intent == \"story_retry\":\n        final_output\
-            \ = _pick(\n            params.get(\"story_retry_response\", \"\"),\n\
-            \            params.get(\"clarify_response\", \"\"),\n        )\n    elif\
-            \ intent == \"story_remembered\":\n        final_output = _pick(\n   \
-            \         params.get(\"homophone_check_response\", \"\"),\n          \
-            \  params.get(\"clarify_response\", \"\"),\n        )\n    elif intent\
-            \ == \"homophone_retry\":\n        final_output = _pick(\n           \
-            \ params.get(\"homophone_retry_response\", \"\"),\n            params.get(\"\
-            clarify_response\", \"\"),\n        )\n    elif intent == \"homophone_remembered\"\
-            :\n        final_output = _pick(\n            params.get(\"study_response\"\
-            , \"\"),\n            params.get(\"clarify_response\", \"\"),\n      \
-            \  )\n    elif intent == \"quiz_answer\":\n        if answer_result ==\
-            \ \"correct\":\n            final_output = _pick(\n                params.get(\"\
-            summary_response\", \"\"),\n                params.get(\"clarify_response\"\
-            , \"\"),\n            )\n        else:\n            final_output = _pick(\n\
-            \                params.get(\"retry_response\", \"\"),\n             \
-            \   params.get(\"clarify_response\", \"\"),\n            )\n    elif intent\
-            \ == \"start_game\":\n        final_output = _pick(\n            params.get(\"\
-            game_response\", \"\"),\n            params.get(\"clarify_response\",\
-            \ \"\"),\n        )\n    elif intent == \"need_more_words\":\n       \
-            \ final_output = _pick(\n            params.get(\"need_more_words_response\"\
-            , \"\"),\n            params.get(\"clarify_response\", \"\"),\n      \
-            \  )\n    else:\n        final_output = _pick(\n            params.get(\"\
-            clarify_response\", \"\"),\n            params.get(\"study_response\"\
-            , \"\"),\n            params.get(\"summary_response\", \"\"),\n      \
-            \      params.get(\"retry_response\", \"\"),\n            params.get(\"\
-            game_response\", \"\"),\n            params.get(\"need_more_words_response\"\
-            , \"\"),\n            params.get(\"homophone_check_response\", \"\"),\n\
-            \            params.get(\"homophone_retry_response\", \"\"),\n       \
-            \     params.get(\"story_check_response\", \"\"),\n            params.get(\"\
-            story_retry_response\", \"\"),\n        )\n\n    return {\"final_output\"\
-            : final_output}\n"
+          code: |-
+            import json
+
+            def _clean(value):
+                text = value if isinstance(value, str) else ""
+                text = text.strip()
+                if text in {"", "null", "None"}:
+                    return ""
+                return text
+
+            def _pick(*values):
+                for item in values:
+                    text = _clean(item)
+                    if text:
+                        return text
+                return ""
+
+            def _load_object(text):
+                try:
+                    value = json.loads(text or "{}")
+                    if isinstance(value, dict):
+                        return value
+                except Exception:
+                    pass
+                return {}
+
+            def _normalize_word_list(value):
+                if not isinstance(value, list):
+                    return []
+                result = []
+                for item in value[:20]:
+                    text = str(item).strip().lower()
+                    if text:
+                        result.append(text)
+                return result
+
+            def _normalize_state(value):
+                if not isinstance(value, dict):
+                    value = {}
+                return {
+                    "all_words": _normalize_word_list(value.get("all_words", [])),
+                    "remaining_words": _normalize_word_list(value.get("remaining_words", [])),
+                    "learned_words": _normalize_word_list(value.get("learned_words", [])),
+                }
+
+            def _normalize_actions(value, fallback=None):
+                items = value if isinstance(value, list) else []
+                result = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    action = _clean(item.get("action"))
+                    label = _clean(item.get("label"))
+                    if not action and not label:
+                        continue
+                    enabled = item.get("enabled", True)
+                    if isinstance(enabled, str):
+                        enabled = enabled.strip().lower() not in {"false", "0", "no"}
+                    elif not isinstance(enabled, bool):
+                        enabled = bool(enabled) if enabled is not None else True
+                    result.append(
+                        {
+                            "action": action,
+                            "label": label or action,
+                            "enabled": enabled,
+                        }
+                    )
+                if result:
+                    return result
+                if isinstance(fallback, list):
+                    return fallback
+                return []
+
+            def _normalize_memory_item(item):
+                if not isinstance(item, dict):
+                    return None
+                method = _clean(item.get("method"))
+                title = _clean(item.get("title"))
+                content = _clean(item.get("content"))
+                if not method and not title and not content:
+                    return None
+                return {
+                    "method": method,
+                    "title": title,
+                    "content": content,
+                }
+
+            def _normalize_quiz(value):
+                if not isinstance(value, dict):
+                    value = {}
+                options = []
+                raw_options = value.get("options", [])
+                if isinstance(raw_options, list):
+                    for item in raw_options:
+                        if not isinstance(item, dict):
+                            continue
+                        key = _clean(item.get("key"))
+                        word = _clean(item.get("word"))
+                        if key or word:
+                            options.append({"key": key, "word": word})
+                quiz = {
+                    "question": _clean(value.get("question")),
+                    "meaning": _clean(value.get("meaning")),
+                    "options": options,
+                    "answer_instruction": _clean(value.get("answer_instruction")),
+                }
+                if quiz["question"] or quiz["meaning"] or quiz["options"] or quiz["answer_instruction"]:
+                    return quiz
+                return {}
+
+            def _normalize_summary_items(value):
+                items = value if isinstance(value, list) else []
+                result = []
+                for item in items[:20]:
+                    if not isinstance(item, dict):
+                        continue
+                    word = _clean(item.get("word")).lower()
+                    meaning = _clean(item.get("meaning"))
+                    memory_tip = _clean(item.get("memory_tip"))
+                    if word or meaning or memory_tip:
+                        result.append(
+                            {
+                                "word": word,
+                                "meaning": meaning,
+                                "memory_tip": memory_tip,
+                            }
+                        )
+                return result
+
+            def _normalize_examples(value):
+                if not isinstance(value, list):
+                    return []
+                result = []
+                for item in value[:10]:
+                    text = str(item).strip()
+                    if text:
+                        result.append(text)
+                return result
+
+            def _default_response():
+                return {
+                    "version": "1.0",
+                    "response_type": "clarify",
+                    "stage": "clarify",
+                    "current_word": "",
+                    "grade": "",
+                    "state": {
+                        "all_words": [],
+                        "remaining_words": [],
+                        "learned_words": [],
+                    },
+                    "content": {
+                        "message": "请直接输入“英文单词 + 年级”，例如“apple 三年级”；如果你是在回答测验，也可以直接回复 A、B、C、D 或英文单词。",
+                        "examples": ["apple 三年级", "exert 初一", "A", "exert"],
+                        "raw_query": "",
+                        "error_reason": "",
+                    },
+                    "actions": [
+                        {
+                            "action": "send_words_or_answer",
+                            "label": "继续输入",
+                            "enabled": True,
+                        }
+                    ],
+                    "message": "请补充新的单词输入，或直接回答测验",
+                }
+
+            def _normalize_response(text):
+                response = _load_object(text)
+                if not response:
+                    response = _default_response()
+
+                response_type = _clean(response.get("response_type"))
+                stage = _clean(response.get("stage")) or response_type or "clarify"
+                if not response_type:
+                    response_type = stage
+
+                response["version"] = _clean(response.get("version")) or "1.0"
+                response["response_type"] = response_type
+                response["stage"] = stage
+                response["current_word"] = _clean(response.get("current_word")).lower()
+                response["grade"] = _clean(response.get("grade"))
+                response["state"] = _normalize_state(response.get("state", {}))
+
+                profile = response.get("profile", {})
+                if not isinstance(profile, dict):
+                    profile = {}
+                response["profile"] = {
+                    "core_meaning": _clean(profile.get("core_meaning")),
+                    "part_of_speech": _clean(profile.get("part_of_speech")),
+                    "phonetic_hint": _clean(profile.get("phonetic_hint")),
+                    "form_note": _clean(profile.get("form_note")),
+                    "difficulty_note": _clean(profile.get("difficulty_note")),
+                }
+
+                content = response.get("content", {})
+                if not isinstance(content, dict):
+                    raw_content = _clean(content)
+                    content = {"text": raw_content} if raw_content else {}
+
+                if "encouragement" in content:
+                    content["encouragement"] = _clean(content.get("encouragement"))
+                if "check_question" in content:
+                    content["check_question"] = _clean(content.get("check_question"))
+                if "summary_text" in content:
+                    content["summary_text"] = _clean(content.get("summary_text"))
+                if "next_word_preview" in content:
+                    content["next_word_preview"] = _clean(content.get("next_word_preview")).lower()
+
+                feedback = response.get("feedback", {})
+                if isinstance(feedback, dict):
+                    normalized_feedback = {
+                        "result": _clean(feedback.get("result")),
+                        "reason": _clean(feedback.get("reason")),
+                        "message": _clean(feedback.get("message")),
+                    }
+                    if any(normalized_feedback.values()):
+                        response["feedback"] = normalized_feedback
+                        content["feedback"] = normalized_feedback
+                    else:
+                        response.pop("feedback", None)
+
+                retry_lesson = response.get("retry_lesson", {})
+                if isinstance(retry_lesson, dict):
+                    normalized_retry = {
+                        "method": _clean(retry_lesson.get("method")),
+                        "content": _clean(retry_lesson.get("content")),
+                    }
+                    if normalized_retry["method"] or normalized_retry["content"]:
+                        response["retry_lesson"] = normalized_retry
+                        content["retry_lesson"] = normalized_retry
+                    else:
+                        response.pop("retry_lesson", None)
+
+                quiz = _normalize_quiz(response.get("quiz", content.get("quiz", {})))
+                if quiz:
+                    response["quiz"] = quiz
+                    content["quiz"] = quiz
+                else:
+                    response.pop("quiz", None)
+                    content.pop("quiz", None)
+
+                if stage == "story_check":
+                    methods = []
+                    if isinstance(content.get("memory_methods"), list):
+                        for item in content.get("memory_methods", []):
+                            normalized_item = _normalize_memory_item(item)
+                            if normalized_item:
+                                methods.append(normalized_item)
+                    if not methods:
+                        legacy_item = _normalize_memory_item(content.get("memory_method", {}))
+                        if legacy_item:
+                            methods.append(legacy_item)
+                    content["memory_methods"] = methods
+                    if methods:
+                        content["memory_method"] = methods[0]
+                    content["check_question"] = _clean(content.get("check_question")) or _clean(response.get("message"))
+                    response["actions"] = _normalize_actions(
+                        response.get("actions"),
+                        [
+                            {"action": "remembered", "label": "记住了", "enabled": True},
+                            {"action": "not_remembered", "label": "还没记住", "enabled": True},
+                        ],
+                    )
+                elif stage == "homophone_check":
+                    methods = []
+                    if isinstance(content.get("memory_methods"), list):
+                        for item in content.get("memory_methods", []):
+                            normalized_item = _normalize_memory_item(item)
+                            if normalized_item:
+                                methods.append(normalized_item)
+                    if not methods:
+                        legacy_item = _normalize_memory_item(content.get("memory_method", {}))
+                        if legacy_item:
+                            methods.append(legacy_item)
+                    content["memory_methods"] = methods
+                    if methods:
+                        content["memory_method"] = methods[0]
+                    content["check_question"] = _clean(content.get("check_question")) or _clean(response.get("message"))
+                    response["actions"] = _normalize_actions(
+                        response.get("actions"),
+                        [
+                            {"action": "remembered", "label": "记住了", "enabled": True},
+                            {"action": "not_remembered", "label": "还没记住", "enabled": True},
+                        ],
+                    )
+                elif stage == "quiz":
+                    response["actions"] = _normalize_actions(
+                        response.get("actions"),
+                        [{"action": "submit_quiz_answer", "label": "回答测验", "enabled": True}],
+                    )
+                elif stage == "quiz_retry":
+                    response["actions"] = _normalize_actions(
+                        response.get("actions"),
+                        [{"action": "submit_quiz_answer", "label": "再次回答测验", "enabled": True}],
+                    )
+                elif stage == "summary_choice":
+                    learned_items = _normalize_summary_items(content.get("learned_word_summaries", []))
+                    content["learned_word_summaries"] = learned_items
+                    count = content.get("learned_word_count")
+                    if isinstance(count, int):
+                        learned_word_count = count
+                    else:
+                        learned_word_count = len(response["state"]["learned_words"])
+                    content["learned_word_count"] = learned_word_count
+                    next_word_preview = _clean(content.get("next_word_preview")).lower()
+                    content["next_word_preview"] = next_word_preview
+                    has_more_words = bool(response["state"]["remaining_words"] or next_word_preview)
+                    response["actions"] = _normalize_actions(
+                        response.get("actions"),
+                        [
+                            {
+                                "action": "continue_memory",
+                                "label": "继续记忆单词",
+                                "enabled": has_more_words,
+                            },
+                            {"action": "start_game", "label": "开始游戏", "enabled": True},
+                        ],
+                    )
+                elif stage == "game_start":
+                    action = _clean(response.get("action")) or "start_game"
+                    command = _clean(response.get("command")) or "开始游戏"
+                    response["action"] = action
+                    response["command"] = command
+                    content["command"] = command
+                    content["next_step"] = action
+                    response["actions"] = _normalize_actions(
+                        response.get("actions"),
+                        [{"action": "start_game", "label": "开始游戏", "enabled": True}],
+                    )
+                elif stage == "need_more_words":
+                    content["message"] = _clean(content.get("message")) or _clean(response.get("message")) or "请发送新的英文单词或单词列表"
+                    response["actions"] = _normalize_actions(
+                        response.get("actions"),
+                        [{"action": "send_new_words", "label": "发送新单词", "enabled": True}],
+                    )
+                elif stage == "clarify":
+                    content["message"] = _clean(content.get("message")) or _clean(response.get("message")) or "请补充新的单词输入，或直接回答测验"
+                    content["examples"] = _normalize_examples(content.get("examples", []))
+                    content["raw_query"] = _clean(content.get("raw_query"))
+                    content["error_reason"] = _clean(content.get("error_reason"))
+                    response["actions"] = _normalize_actions(
+                        response.get("actions"),
+                        [{"action": "send_words_or_answer", "label": "继续输入", "enabled": True}],
+                    )
+                else:
+                    response["actions"] = _normalize_actions(response.get("actions"), [])
+
+                content["message"] = _clean(content.get("message")) or _clean(response.get("message")) or _clean(content.get("check_question"))
+                response["content"] = content
+                response["message"] = content["message"]
+                return json.dumps(response, ensure_ascii=False)
+
+            def main(params):
+                intent = str(params.get("intent", "")).strip()
+                answer_result = str(params.get("answer_result", "")).strip().lower()
+
+                if intent in {"new_words", "continue_memory"}:
+                    final_output = _pick(
+                        params.get("story_check_response", ""),
+                        params.get("clarify_response", ""),
+                    )
+                elif intent == "story_retry":
+                    final_output = _pick(
+                        params.get("story_retry_response", ""),
+                        params.get("clarify_response", ""),
+                    )
+                elif intent == "story_remembered":
+                    final_output = _pick(
+                        params.get("homophone_check_response", ""),
+                        params.get("clarify_response", ""),
+                    )
+                elif intent == "homophone_retry":
+                    final_output = _pick(
+                        params.get("homophone_retry_response", ""),
+                        params.get("clarify_response", ""),
+                    )
+                elif intent == "homophone_remembered":
+                    final_output = _pick(
+                        params.get("study_response", ""),
+                        params.get("clarify_response", ""),
+                    )
+                elif intent == "quiz_answer":
+                    if answer_result == "correct":
+                        final_output = _pick(
+                            params.get("summary_response", ""),
+                            params.get("clarify_response", ""),
+                        )
+                    else:
+                        final_output = _pick(
+                            params.get("retry_response", ""),
+                            params.get("clarify_response", ""),
+                        )
+                elif intent == "start_game":
+                    final_output = _pick(
+                        params.get("game_response", ""),
+                        params.get("clarify_response", ""),
+                    )
+                elif intent == "need_more_words":
+                    final_output = _pick(
+                        params.get("need_more_words_response", ""),
+                        params.get("clarify_response", ""),
+                    )
+                else:
+                    final_output = _pick(
+                        params.get("clarify_response", ""),
+                        params.get("study_response", ""),
+                        params.get("summary_response", ""),
+                        params.get("retry_response", ""),
+                        params.get("game_response", ""),
+                        params.get("need_more_words_response", ""),
+                        params.get("homophone_check_response", ""),
+                        params.get("homophone_retry_response", ""),
+                        params.get("story_check_response", ""),
+                        params.get("story_retry_response", ""),
+                    )
+
+                return {"final_output": _normalize_response(final_output)}
           language: Python
       meta:
         handlers:
