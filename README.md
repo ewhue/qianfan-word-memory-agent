@@ -10,11 +10,11 @@
 
 ## 预览图
 
-### 百度平台工作流截图
+### 结构化流程图
 
 ![百度平台工作流截图](./assets/platform-workflow.png)
 
-### 结构化流程图
+### 百度平台工作流截图
 
 ![结构化流程图](./assets/workflow-diagram.png)
 
